@@ -161,22 +161,46 @@ Only `src/store.js` needs to change. Its four methods (`addNote`, `search`, `lis
 |---|---|
 | `npm install` | Installs all dependencies — run this once, and again if `package.json` changes |
 | `npm start` | Runs the server, waiting for an MCP client to connect (e.g. Claude Desktop) |
-| `npm test` | Runs all 23 tests |
+| `npm test` | Runs all 26 tests |
 | `npm run test:unit` | Runs only the fast tests (no server spawn) |
-| `npm run test:e2e` | Runs only the full real-server test |
+| `npm run test:e2e` | Runs only the full real-server stdio test |
+| `npm run test:http` | Runs only the HTTP transport test (the Vercel path) |
 | `git status` | Shows what's changed since your last commit |
 | `git add -A && git commit -m "message"` | Saves your changes permanently in git history |
 | `git push` | Sends your saved changes to GitHub |
 
 ---
 
-## 9. Deploying a version to Vercel (the honest version)
+## 9. The Vercel-deployed version — what was actually built, and why it's a separate piece
 
-**Important distinction:** the server described above talks over **stdio** — Claude Desktop runs it as a local program on your machine. Vercel does not run that kind of program at all; it runs code that responds to web (HTTP) requests. So the stdio server itself cannot be "put on Vercel" — that combination doesn't exist.
+**Important distinction:** the server described in sections 1–8 talks over **stdio** — Claude Desktop runs it as a local program on your machine. Vercel does not run that kind of program at all; it runs code that responds to web (HTTP) requests. So the stdio server itself cannot be "put on Vercel" — that combination doesn't exist. This is why the deployed version is genuinely separate code, not a config change.
 
-**What actually deploys:** MCP has a second way to run, called **Streamable HTTP**, built specifically for a server that lives on the internet instead of your own machine. Deploying this way also requires swapping `data/notes.json` for a real hosted database, because Vercel's serverless functions don't keep a persistent local disk between requests — each request can land on a fresh, empty instance.
+### What was added
 
-See the project's main conversation history / follow-up work for the HTTP-deployable version and its required database setup, since that's a genuinely separate piece of engineering from the local stdio server documented above.
+| New file | Purpose |
+|---|---|
+| `src/createServer.js` | The tool/resource definitions, pulled out of `src/server.js` so both transports can share the exact same logic. Now accepts an injectable `store`, defaulting to the local file store |
+| `api/mcp.js` | The Vercel serverless entrypoint. Uses MCP's **Streamable HTTP** transport, which speaks plain web `Request`/`Response` — the same shape Vercel functions expect natively |
+| `src/storePostgres.js` | The exact same 4-method interface as `store.js`, backed by Postgres/pgvector instead of a JSON file, because a serverless function has no persistent local disk between requests |
+| `db/schema.sql` | Already existed as a "future upgrade" reference; now actually used, unmodified, as the real schema this version runs against |
+| `test/http.test.js` | A genuine end-to-end test: a real `http.createServer` wired exactly like `api/mcp.js`, and a real MCP client talking to it over `fetch` |
+
+### Why `createServer.js` had to be split out
+
+Before this, `server.js` had the tool definitions **and** the stdio-startup code in one file, with the startup code running unconditionally at the bottom. `api/mcp.js` needed to reuse the tool definitions **without** triggering stdio startup — so the factory function (`createServer()`) was moved to its own file with no side effects, and both `server.js` (stdio) and `api/mcp.js` (HTTP) now import it and attach their own transport.
+
+### Why the HTTP version runs "stateless"
+
+Every incoming HTTP request in `api/mcp.js` creates a **brand-new** `McpServer` and transport, rather than reusing one across requests (`sessionIdGenerator: undefined` in the transport options — this is MCP's own documented "stateless mode"). This matters because a serverless function instance can be silently destroyed and replaced by Vercel at any time; code that assumed state survived between requests would intermittently and confusingly break. `test/http.test.js` proves this pattern actually works by calling three separate tools, each going through a completely fresh server instance, and confirming the data (held in the injected store, not in server memory) is still there each time.
+
+### What was genuinely tested vs. what couldn't be
+
+- **Fully tested:** the HTTP transport wiring itself — a real HTTP server, a real MCP client, real tool calls over real `fetch` requests, using the already-proven file store as the backend for the test (isolating "does the HTTP plumbing work" from "does Postgres work").
+- **Not tested here:** `storePostgres.js` against an actual live database. That requires real Supabase credentials, which this build environment doesn't have and shouldn't be given. It was written to match the identical interface `store.js` already has real, passing tests for — but "matches the interface" and "definitely has zero bugs against a live database" are different claims, and only the second one needs your own Supabase project to verify. Run it once for real before trusting it in front of an interviewer.
+
+### Full setup steps
+
+See the README's **"Deploying to Vercel"** section for the exact Supabase and Vercel CLI steps.
 
 ---
 

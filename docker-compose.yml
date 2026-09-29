@@ -1,0 +1,38 @@
+# Optional production-style upgrade path — NOT required to run this project.
+#
+# By default this server uses a local JSON file for vector storage (see
+# src/store.js) and no cache (see src/cache.js), so it runs with zero
+# infrastructure. This compose file is here to demonstrate the upgrade path
+# I'd take at real scale: swap the file-based store for pgvector (a real
+# ANN-indexed vector database) and turn on Redis for the search cache,
+# without changing any of the MCP server/tool code.
+#
+# Usage:
+#   docker compose up -d
+#   cp .env.example .env   # then set DATABASE_URL / REDIS_URL to match below
+#
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kb
+      POSTGRES_PASSWORD: kb_dev_password
+      POSTGRES_DB: knowledge_base
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  pg_data:
+  redis_data:
